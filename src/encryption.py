@@ -5,11 +5,11 @@ class Encryption:
     def __init__(self):
         self.context = ts.context(
             ts.SCHEME_TYPE.CKKS,
-            poly_modulus_degree=8192,
-            coeff_mod_bit_sizes=[60, 40, 40, 60]
+            poly_modulus_degree=16384,
+            coeff_mod_bit_sizes= [60, 30, 30, 30, 60]
         )
         self.context.generate_galois_keys()
-        self.context.global_scale = 2 ** 40
+        self.context.global_scale = 2 ** 30
 
     def get_context(self) -> ts.Context:
         return self.context

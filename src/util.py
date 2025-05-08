@@ -1,7 +1,17 @@
 import random
 from tenseal import CKKSVector
-from typing import List
-from graph import Vertex
+from typing import Dict
+from graph import Vertex, Graph
+import textwrap
+
+def sum_values(data: dict) -> int:
+    total = 0
+    for value in data.values():
+        if isinstance(value, int):
+            total += value
+        elif isinstance(value, list):
+            total += sum(value)
+    return total
 
 def get_random_mask(lb, ub, inclusive=False):
     while True:
@@ -11,6 +21,148 @@ def get_random_mask(lb, ub, inclusive=False):
         else:
             if lb < mask < ub:
                 return mask
+
+def merge_subgraph(x: Graph, x1: Vertex, y: Graph, y1: Vertex) -> Dict[Vertex, Vertex]:
+    """
+    Merge into graph y (at node y1) the entire subgraph of x rooted at x1.
+    Preserves the original cycle/topology without infinite recursion.
+
+    Returns a mapping from each visited x-node to its corresponding y-node.
+    """
+    mapping: Dict[Vertex, Vertex] = {x1: y1}
+    visited = set()
+
+    def dfs(u: Vertex):
+        visited.add(u)
+        parent_y = mapping[u]
+
+        # For each outgoing edge u -> child_x in x
+        for edge in x.get_edges(u):
+            child_x = edge.v2
+            lbl = edge.label
+
+            # 1) If we've already mapped child_x, reuse it
+            if child_x in mapping:
+                target_y = mapping[child_x]
+            else:
+                # 2) Otherwise, look for an existing y-node under parent_y
+                target_y = None
+                for y_edge in y.get_edges(parent_y):
+                    if y_edge.v2.label == child_x.label and y_edge.label == lbl:
+                        target_y = y_edge.v2
+                        break
+                # 3) If none found, clone child_x into y
+                if target_y is None:
+                    target_y = Vertex(child_x.uri, child_x.label)
+                    y.add_vertex(target_y)
+                mapping[child_x] = target_y
+
+            # 4) Ensure the edge (parent_y -> target_y, lbl) exists in y
+            if not any(e.v2 == target_y and e.label == lbl for e in y.get_edges(parent_y)):
+                y.add_edge(parent_y, target_y, lbl)
+
+            # 5) Recurse if we haven’t yet visited child_x
+            if child_x not in visited:
+                dfs(child_x)
+
+    dfs(x1)
+    return mapping
+
+def merge_graphs(g1: Graph, g2: Graph) -> Graph:
+    merged_graph = Graph()
+    label_to_vertex = {}
+    seen_edges = set()
+
+    # Always prefer g1's root
+    chosen_root_label = g1.vertices[0].label if g1.vertices else None
+    other_root_label = g2.vertices[0].label if g2.vertices else None
+
+    def add_vertex_to_merged(v: Vertex):
+        # Redirect root from g2 if it has a different label
+        label = v.label
+        if label == other_root_label and label != chosen_root_label:
+            label = chosen_root_label  # unify label
+
+        if label not in label_to_vertex:
+            # Use g1's URI if it's the chosen root
+            if label == chosen_root_label:
+                # Find g1's root to use its URI
+                for v1 in g1.vertices:
+                    if v1.label == chosen_root_label:
+                        new_vertex = Vertex(v1.uri, label)
+                        break
+                else:
+                    new_vertex = Vertex(v.uri, label)
+            else:
+                new_vertex = Vertex(v.uri, label)
+
+            merged_graph.add_vertex(new_vertex)
+            label_to_vertex[label] = new_vertex
+        return label_to_vertex[label]
+
+    # Add vertices from both graphs
+    for v in g1.vertices + g2.vertices:
+        add_vertex_to_merged(v)
+
+    # Add deduplicated edges
+    for e in g1.edges + g2.edges:
+        v1 = add_vertex_to_merged(e.v1)
+        v2 = add_vertex_to_merged(e.v2)
+        edge_key = (v1.label, v2.label, e.label)
+        if edge_key not in seen_edges:
+            merged_graph.add_edge(v1, v2, e.label)
+            seen_edges.add(edge_key)
+
+    return merged_graph
+
+def append_subgraph_at_uri(g: Graph, g1: Graph, uri: str):
+    # Lookup the vertex in g where we will attach g1
+    target = g.lookup(uri)
+    if not isinstance(target, Vertex):
+        raise ValueError(f"Vertex with URI '{uri}' not found in g")
+
+    uri_to_vertex = {v.uri: v for v in g.vertices}
+    label_to_vertex = {v.label: v for v in g.vertices}
+    existing_edges = {(e.v1.label, e.v2.label, e.label) for e in g.edges}
+
+    visited = set()
+    g1_root = g1.vertices[0]  # Assume root is first
+
+    # if g1_root.label != target.label:
+    #     raise ValueError("Expected root of g1 to have the same label as target vertex in g")
+
+    def dfs(v1: Vertex, g_v1: Vertex):
+        if v1.uri in visited:
+            return
+        visited.add(v1.uri)
+
+        for edge in g1.get_edges(v1):
+            child = edge.v2
+
+            # Try to find an existing vertex in g with the same label
+            if child.label in label_to_vertex:
+                g_child = label_to_vertex[child.label]
+            else:
+                g_child = Vertex(child.uri, child.label)
+                g.add_vertex(g_child)
+                uri_to_vertex[g_child.uri] = g_child
+                label_to_vertex[g_child.label] = g_child
+
+            edge_key = (g_v1.label, g_child.label, edge.label)
+            if edge_key not in existing_edges:
+                g.add_edge(g_v1, g_child, edge.label)
+                existing_edges.add(edge_key)
+
+            dfs(child, g_child)
+
+    dfs(g1_root, target)
+
+
+
+
+
+
+
 
 # def h_r(vec1: CKKSVector, k, encrypt_map, user_profile) -> List[List[Vertex]]:
 #     P = []
@@ -58,3 +210,56 @@ def get_random_mask(lb, ub, inclusive=False):
 #         if v.uri == v_uri:
 #             return v
 #     return None
+
+def write_table(
+        measurements,
+        output_file,
+        include_headers=True
+):
+    """
+    Write measurements to a file in a 3-column, uniform-width table.
+
+    measurements: list of (bytes_sent, bytes_received, time) tuples
+    output_file:   path to output text file
+    include_headers: if True, write the wrapped headers; otherwise skip them
+    """
+    headers = ["Total Bytes Sent", "Total Bytes Received", "Total Time"]
+
+    # Compute the widest data string in any column
+    data_width = max(
+        max(len(str(sent)) for sent, _, _ in measurements),
+        max(len(str(rec)) for _, rec, _ in measurements),
+        max(len(f"{t:.3f}") for *_, t in measurements),
+    )
+    # Ensure headers can wrap at spaces without cutting words
+    max_header_word = max(len(word) for h in headers for word in h.split())
+    col_width = max(data_width, max_header_word)
+
+    # Prepare wrapped headers
+    wrapped_headers = [textwrap.wrap(h, width=col_width) for h in headers]
+    max_lines = max(len(lines) for lines in wrapped_headers)
+    for lines in wrapped_headers:
+        lines += [""] * (max_lines - len(lines))
+
+    total_width = 3 * col_width + 2  # two spaces between columns
+
+    with open(output_file, "a") as f:
+        if include_headers:
+            # Write header lines
+            for row in range(max_lines):
+                for col in range(3):
+                    f.write(wrapped_headers[col][row].ljust(col_width))
+                    if col < 2:
+                        f.write(" ")
+                f.write("\n")
+            # Separator
+            f.write("-" * total_width + "\n")
+
+        # Write each measurement row
+        for sent, rec, t in measurements:
+            f.write(str(sent).ljust(col_width))
+            f.write(" ")
+            f.write(str(rec).ljust(col_width))
+            f.write(" ")
+            f.write(f"{t:.3f}".ljust(col_width))
+            f.write("\n")

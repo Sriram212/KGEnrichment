@@ -17,6 +17,8 @@ class Vertex(Entity):
         self.outward_degree = 0
     def __eq__(self, other):
         return isinstance(other, Vertex) and self.uri == other.uri
+    def __hash__(self):
+        return hash(self.uri)
 
 
 class Edge(Entity):
@@ -34,8 +36,10 @@ class Graph:
     def __init__(self):
         self.edges = []
         self.vertices = []
+
     def add_vertex(self, vertex):
         self.vertices.append(vertex)
+
     
     def remove_vertex(self, vertex):
         self.vertices.remove(vertex)
@@ -71,8 +75,28 @@ class Graph:
                     return vertex
         # If not found
         return None
-    def extract_lineage_set(self, v):
-        pass
+
+    def extract_lineage_set(self, v: Vertex):
+        lineage_graph = Graph()
+        visited = set()
+
+        def dfs(current_vertex):
+            if current_vertex in visited:
+                return
+            visited.add(current_vertex)
+
+            # Add current vertex to lineage graph
+            lineage_graph.add_vertex(current_vertex)
+
+            # Get outward edges
+            for edge in self.get_edges(current_vertex):
+                next_vertex = edge.v2
+                # lineage_graph.add_vertex(next_vertex)
+                lineage_graph.add_edge(current_vertex, next_vertex, edge.label)
+                dfs(next_vertex)
+
+        dfs(v)
+        return lineage_graph
 
     def get_edges(self, v: Vertex) -> List[Edge]:
         edge_list = []
@@ -81,3 +105,16 @@ class Graph:
                 edge_list.append(edge)
 
         return edge_list
+
+    def print_graph(self):
+        print("Graph:")
+        for vertex in self.vertices:
+            outgoing = [edge for edge in self.edges if edge.v1 == vertex]
+            if outgoing:
+                print(f"  {vertex.label} ({vertex.uri}) ->")
+                for edge in outgoing:
+                    print(f"    └── {edge.v2.label} ({edge.v2.uri}) [label: {edge.label}]")
+            else:
+                print(f"  {vertex.label} ({vertex.uri}) -> ∅")
+
+
