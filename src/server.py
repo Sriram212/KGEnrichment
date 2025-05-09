@@ -15,8 +15,8 @@ from llm import LLMHelper
 from tenseal import CKKSVector
 from predictor import LLMPredictor
 from util import get_random_mask, merge_graphs, append_subgraph_at_uri, sum_values, merge_subgraph, write_table
-from graph_example_server import get_graph
-# from create_bob_graph import get_graph
+# from graph_example_server import get_graph
+from create_bob_graph import get_graph
 import time
 from visualize_graph import visualize_graph
 
@@ -83,6 +83,7 @@ PORT = 65432  # Port to listen on (non-privileged ports are > 1023)
 times_dict = {}
 bytes_sent_dict = {}
 bytes_rec_list = []
+hv_cache = {}
 
 # v1: Vertex = Vertex('bob/v1', 'v1')
 # v2: Vertex = Vertex('bob/v2', 'Bob')
@@ -169,6 +170,19 @@ def get_client_sub_graph(client_uri: str, decryption_socket: socket) -> Graph:
 
 def h_v(vec1: CKKSVector, vec2: CKKSVector, decryption_socket: socket):
     start = time.time()
+
+    if (vec1, vec2) in hv_cache:
+
+        end = time.time()
+        total_time = end - start
+
+        if "Vertex Similarity" in times_dict:
+            times_dict["Vertex Similarity"].append(total_time)
+        else:
+            times_dict["Vertex Similarity"] = [total_time]
+
+        return hv_cache[(vec1, vec2)]
+
     m_v = (vec1.dot(vec2) - sigma) * mask
     m_v_bytes = pickle.dumps(m_v.serialize())
 
@@ -183,6 +197,7 @@ def h_v(vec1: CKKSVector, vec2: CKKSVector, decryption_socket: socket):
 
     response = decryption_socket.recv(4)
     bytes_rec_list.append(4)
+
     if not response:
         return None
 
@@ -194,6 +209,8 @@ def h_v(vec1: CKKSVector, vec2: CKKSVector, decryption_socket: socket):
         times_dict["Vertex Similarity"].append(total_time)
     else:
         times_dict["Vertex Similarity"] = [total_time]
+
+    hv_cache[(vec1, vec2)] = response_bool
 
     return response_bool
 
@@ -360,7 +377,7 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
         client_paths = []
         client_edges = []
         client_lengths = []
-        # client_uris = paths_edges_uris_map["URIs"]
+        client_uris = paths_edges_uris_map["URIs"]
         # print(f"CLIENT URIs: {client_uris}")
         for path in paths_edges_uris_map["Vectors"]:
             client_paths.append(ts.ckks_vector_from(context, path))
@@ -371,8 +388,8 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
         for length in paths_edges_uris_map["Length"]:
             client_lengths.append(ts.ckks_vector_from(context, length))
 
-        # for i in range(0, len(client_uris)):
-        #     V_client.append((client_uris[i][1], client_paths[i][1]) )
+        for i in range(0, len(client_paths)):
+            V_client.append((client_uris[i], client_paths[i]))
 
         ecache[vec2_uri] = V_client
 
@@ -660,7 +677,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         enrichment_end_time = time.time()
         end_time = time.time()
         total_time = end_time - start_time
-        times_dict["Enrichment"] = enrichment_start_time - enrichment_end_time
+        times_dict["Enrichment"] = enrichment_end_time - enrichment_start_time
         data = struct.pack("!I", 0)
         bytes_sent_dict["End"] = 4
         conn.sendall(data)

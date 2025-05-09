@@ -11,8 +11,8 @@ import pickle
 from llm import LLMHelper
 from typing import List, Dict, Tuple
 
-from graph_example_client import get_graph
-# from create_amy_graph import get_graph
+# from graph_example_client import get_graph
+from create_amy_graph import get_graph
 
 from tenseal import CKKSVector
 import tenseal as ts
@@ -189,7 +189,7 @@ def request_handler(conn):
 
             # print(f'Length of edges vectors encrypted: {len(edges_vectors_encrypted)}')
 
-            uris = [[x.uri for x in path] for path in paths]
+            uris = [path[1].uri for path in paths]
 
             paths_serialized = [path[1].serialize() for path in paths_vectors_encrypted]
             edges_serialized = [edge.serialize() for edge in edges_vectors_encrypted]
