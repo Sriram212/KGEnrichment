@@ -12,7 +12,6 @@ import pickle
 import numpy as np
 from typing import Dict, List, Tuple
 from llm import LLMHelper
-from tenseal import CKKSVector
 from predictor import LLMPredictor
 from util import get_random_mask, merge_graphs, append_subgraph_at_uri, sum_values, merge_subgraph, write_table
 # from graph_example_server import get_graph
@@ -67,7 +66,7 @@ PORT = 65432  # Port to listen on (non-privileged ports are > 1023)
 # edge_v1_v5 = user_profile.add_edge(v1, v5, 'plays')
 #
 # edge_v3_v6 = user_profile.add_edge(v3, v6, 'plays')
-# 
+#
 # edge_v3_v7 = user_profile.add_edge(v3, v7, 'lives in')
 # edge_v7_v8 = user_profile.add_edge(v7, v8, 'is in')
 # edge_v8_v9 = user_profile.add_edge(v8, v9, 'capital is')
@@ -140,7 +139,14 @@ delta = 0.6
 # cache = {}
 ecache = {}
 
-client_encrypt_map = {}
+client_embed_map = {}
+
+# Find the matching key
+def find_key_by_value(dictionary, target_array):
+    for key, value in dictionary.items():
+        if np.array_equal(value, target_array):
+            return key
+    return None  # or raise an exception if needed
 
 def get_vertex_object(v_uri: str) -> Vertex | None:
     for v in vertices:
@@ -148,11 +154,11 @@ def get_vertex_object(v_uri: str) -> Vertex | None:
             return v
     return None
 
-def serialize_encryption_map(encrypted_map: Dict[str, CKKSVector]) -> Dict[str, bytes]:
-    result: Dict[str, bytes] = {}
-    for uri, encryption in encrypted_map.items():
-        result[uri] = encryption.serialize()
-    return result
+# def serialize_encryption_map(encrypted_map: Dict[str, CKKSVector]) -> Dict[str, bytes]:
+#     result: Dict[str, bytes] = {}
+#     for uri, encryption in encrypted_map.items():
+#         result[uri] = encryption.serialize()
+#     return result
 
 def get_client_sub_graph(client_uri: str, decryption_socket: socket) -> Graph:
     client_uri_bytes = client_uri.encode()
@@ -168,10 +174,10 @@ def get_client_sub_graph(client_uri: str, decryption_socket: socket) -> Graph:
     return pickle.loads(response)
 
 
-def h_v(vec1: CKKSVector, vec2: CKKSVector, decryption_socket: socket):
+def h_v(vec1: np.ndarray, vec2: np.ndarray):
     start = time.time()
 
-    if (vec1, vec2) in hv_cache:
+    if (vec1.tobytes(), vec2.tobytes()) in hv_cache:
 
         end = time.time()
         total_time = end - start
@@ -181,27 +187,10 @@ def h_v(vec1: CKKSVector, vec2: CKKSVector, decryption_socket: socket):
         else:
             times_dict["Vertex Similarity"] = [total_time]
 
-        return hv_cache[(vec1, vec2)]
+        return hv_cache[(vec1.tobytes(), vec2.tobytes())]
 
-    m_v = (vec1.dot(vec2) - sigma) * mask
-    m_v_bytes = pickle.dumps(m_v.serialize())
-
-    response_bytes = struct.pack("!I", len(m_v_bytes)) + struct.pack("!I", 1) + m_v_bytes
-
-    if "Vertex Similarity" in bytes_sent_dict:
-        bytes_sent_dict["Vertex Similarity"].append(len(response_bytes))
-    else:
-        bytes_sent_dict["Vertex Similarity"] = [len(response_bytes)]
-
-    decryption_socket.sendall(response_bytes)
-
-    response = decryption_socket.recv(4)
-    bytes_rec_list.append(4)
-
-    if not response:
-        return None
-
-    response_bool = bool(struct.unpack("!I", response)[0])
+    m_v = vec1.dot(vec2) - sigma
+    response_bool = m_v >= 0
     end = time.time()
     total_time = end - start
 
@@ -210,41 +199,19 @@ def h_v(vec1: CKKSVector, vec2: CKKSVector, decryption_socket: socket):
     else:
         times_dict["Vertex Similarity"] = [total_time]
 
-    hv_cache[(vec1, vec2)] = response_bool
+    hv_cache[(vec1.tobytes(), vec2.tobytes())] = response_bool
 
     return response_bool
 
-def h_p(path1: CKKSVector, path1_len: CKKSVector, path2: CKKSVector, path2_len: CKKSVector, decryption_socket: socket) -> float:
+def h_p(path1: np.ndarray, path1_len: int, path2: np.ndarray, path2_len: int) -> float:
     # m_p = ((path1.dot(path2) * (1.0/(path1_len + path2_len))) - delta) * mask
     start = time.time()
-    m_p = (path1.dot(path2)) * (0.25 * (path1_len + path2_len))
-    m_p = (m_p - sigma) * mask
+    m_p = (path1.dot(path2)) / (path1_len + path2_len)
+    m_p = m_p - sigma
     # print(f"MP: {m_p.decrypt()[0]}")
     # print(f'Dot: {path1.dot(path2).decrypt()[0]}')
-    m_p_bytes = pickle.dumps(m_p.serialize())
 
-    response_bytes = struct.pack("!I", len(m_p_bytes)) + struct.pack("!I", 3) + m_p_bytes
-
-    if "Path Similarity" in bytes_sent_dict:
-        bytes_sent_dict["Path Similarity"].append(len(response_bytes))
-    else:
-        bytes_sent_dict["Path Similarity"] = [len(response_bytes)]
-
-    decryption_socket.sendall(response_bytes)
-
-    response = decryption_socket.recv(8)
-    bytes_rec_list.append(8)
-    response = struct.unpack('d', response)[0]
-    # print(f'Response: {response}')
-    end = time.time()
-    total_time = end - start
-
-    if "Path Similarity" in times_dict:
-        times_dict["Path Similarity"].append(total_time)
-    else:
-        times_dict["Path Similarity"] = [total_time]
-
-    return response
+    return m_p
 
 def r_p(path: List[Vertex]) -> float:
     product = 1
@@ -254,12 +221,13 @@ def r_p(path: List[Vertex]) -> float:
 
     return product
 
-def h_r(vec1: CKKSVector, k) -> Tuple[List[List[Vertex]], List[List[Edge]]]:
+def h_r(vec1: np.ndarray, k) -> Tuple[List[List[Vertex]], List[List[Edge]]]:
     start = time.time()
     P = []
     scores = []
     edges = []
-    vec1_uri = list(encrypt_map_server.keys())[list(encrypt_map_server.values()).index(vec1)]
+    vec1_uri = find_key_by_value(embedding_map_server, vec1)
+    # vec1_uri = list(embedding_map_server.keys())[list(embedding_map_server.values()).index(vec1)]
     list_edges = user_profile.get_edges(get_vertex_object(vec1_uri))
     for edge in list_edges:
         p = [edge.v1, edge.v2]
@@ -320,10 +288,10 @@ def receive_full_message(conn):
     return msg
 
 
-def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str, delta, k, decryption_socket: socket) -> bool:
+def para_match(vec1: np.ndarray, vec1_uri: str, vec2: np.ndarray, vec2_uri: str, delta, k, decryption_socket: socket) -> bool:
     start = time.time()
     # print(f"Vec2: {vec2_uri}")
-    if not h_v(vec1, vec2, decryption_socket):
+    if not h_v(vec1, vec2):
         cache[(vec1_uri, vec2_uri)] = [False, []]
         return False
 
@@ -346,14 +314,14 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
         paths, edges = h_r(vec1, k)
         # print(f'Edges: {[[x.label for x in edge] for edge in edges]}')
         # print(f'Paths: {[[x.label for x in path] for path in paths]}')
-        server_paths: List[List[CKKSVector]] = [[encrypt_map_server[x.uri] for x in path] for path in paths]
+        server_paths: List[List[np.ndarray]] = [[embedding_map_server[x.uri] for x in path] for path in paths]
         server_uris = [[x.uri for x in path] for path in paths]
-        server_lengths = [ts.ckks_vector(context, [1/len(path)]) for path in paths]
-        server_edges: List[CKKSVector] = [model.encrypt_path(context, model.encode_path(x)) for x in edges]
+        server_lengths = [len(path) for path in paths]
+        server_edges: List[np.ndarray] = [model.encode_path(x) for x in edges]
 
         for path in paths:
             uri = path[1].uri
-            V_server.append((uri, encrypt_map_server[uri]))
+            V_server.append((uri, embedding_map_server[uri]))
         ecache[vec1_uri] = V_server
 
     if vec2_uri not in ecache:
@@ -380,13 +348,13 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
         client_uris = paths_edges_uris_map["URIs"]
         # print(f"CLIENT URIs: {client_uris}")
         for path in paths_edges_uris_map["Vectors"]:
-            client_paths.append(ts.ckks_vector_from(context, path))
+            client_paths.append(path)
 
         for edge in paths_edges_uris_map["Edges"]:
-            client_edges.append(ts.ckks_vector_from(context, edge))
+            client_edges.append(edge)
 
         for length in paths_edges_uris_map["Length"]:
-            client_lengths.append(ts.ckks_vector_from(context, length))
+            client_lengths.append(length)
 
         for i in range(0, len(client_paths)):
             V_client.append((client_uris[i], client_paths[i]))
@@ -402,10 +370,10 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
         for c_index in range(len(V_client)):
             client_prime_uri, client_prime_vec = V_client[c_index]
             # print(f"Client URI: {client_prime_uri}, Server URI: {server_prime_uri}")
-            if h_v(server_prime_vec, client_prime_vec, decryption_socket):
+            if h_v(server_prime_vec, client_prime_vec):
                 # print("HERE")
                 l_u_prime.append((client_prime_uri, client_prime_vec))
-                score = h_p(server_edges[s_index], server_lengths[s_index], client_edges[c_index], client_lengths[c_index], decryption_socket)
+                score = h_p(server_edges[s_index], server_lengths[s_index], client_edges[c_index], client_lengths[c_index])
                 # print(f"Dot Product: {server_edges[s_index].dot(client_edges[c_index]).decrypt()[0]}")
                 scores.append(score)
         sorted_l_u_prime = [k for _, k in sorted(zip(scores, l_u_prime), reverse=True, key=lambda pair: pair[0])]
@@ -447,7 +415,7 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
                     index += 1
                 p2_length = client_lengths[index]
                 client_path = client_edges[index]
-                sum += h_p(server_path, p1_length, client_path, p2_length, decryption_socket)
+                sum += h_p(server_path, p1_length, client_path, p2_length)
                 W.append((server_prime_uri, client_prime_uri))
                 if sum > delta:
                     cache[(vec1_uri, vec2_uri)] = [True, W]
@@ -471,7 +439,7 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
                 index += 1
             client_path = client_edges[index]
             p2_length = client_lengths[index]
-            max_score -= h_p(server_path, p1_length, client_path, p2_length, decryption_socket)
+            max_score -= h_p(server_path, p1_length, client_path, p2_length)
 
             for client_prime_n_uri, client_prime_n_vec in L[(server_prime_uri, server_prime_vec)]:
                 if client_prime_n_uri != client_prime_uri:
@@ -484,7 +452,7 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
                     client_path = client_edges[index]
                     p2_length = client_lengths[index]
 
-                    max_score += h_p(server_path, p1_length, client_path, p2_length, decryption_socket)
+                    max_score += h_p(server_path, p1_length, client_path, p2_length)
 
             if max_score < delta:
                 break
@@ -494,7 +462,7 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
     for server_p_uri, client_p_uri in cache:
         if (vec1_uri, vec2_uri) in cache[(server_p_uri, client_p_uri)][1]:
             del cache[(server_p_uri, client_p_uri)]
-            para_match(encrypt_map_server[server_p_uri], server_p_uri, client_encrypt_map[client_p_uri], client_p_uri, delta, k, decryption_socket)
+            para_match(embedding_map_server[server_p_uri], server_p_uri, client_embed_map[client_p_uri], client_p_uri, delta, k, decryption_socket)
 
     end = time.time()
     total_time = end - start
@@ -522,31 +490,31 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 
         bytes_rec_list.append(len(b"".join(data)))
 
-        serialized_encrypt_map_client = pickle.loads(b"".join(data))
+        serialized_embedding_map_client = pickle.loads(b"".join(data))
 
-        if isinstance(serialized_encrypt_map_client, Dict):
+        if isinstance(serialized_embedding_map_client, Dict):
             print('Received encryption')
         else:
             print('Data corrupted')
 
-        context: Context = ts.context_from(data=serialized_encrypt_map_client['Context'])
+        # context: Context = ts.context_from(data=serialized_encrypt_map_client['Context'])
         vertex_embedding_client = None
         uri_client = None
 
-        for uri, vec in serialized_encrypt_map_client['Vertices'].items():
+        for uri, vec in serialized_embedding_map_client['Vertices'].items():
             uri_client = uri
-            vertex_embedding_client = ts.ckks_vector_from(context, vec)
-            client_encrypt_map[uri_client] = vertex_embedding_client
+            vertex_embedding_client = vec
+            client_embed_map[uri_client] = vertex_embedding_client
 
         # paths_client = [[ts.ckks_vector_from(context, vec) for vec in path] for path in serialized_encrypt_map_client['Paths']]
 
-        encryption_start_time = time.time()
-        encrypt_map_server: Dict[str, CKKSVector] = model.encrypt_embeddings(context, normalize = True)
-        encryption_end_time = time.time()
-        times_dict["Encryption"] = encryption_end_time - encryption_start_time
+        # encryption_start_time = time.time()
+        # # encrypt_map_server: Dict[str, CKKSVector] = model.encrypt_embeddings(context, normalize = True)
+        # encryption_end_time = time.time()
+        # times_dict["Encryption"] = encryption_end_time - encryption_start_time
 
 
-        vertex_dot_product_map: Dict[str, CKKSVector] = {}
+        # vertex_dot_product_map: Dict[str, CKKSVector] = {}
 
         serialized_map_server = {}
 
@@ -575,7 +543,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         PI = {}
         C = {}
 
-        for uri_server, vec_server in encrypt_map_server.items():
+        for uri_server, vec_server in embedding_map_server.items():
             PI[uri_server] = []
             C[uri_server] = []
             cache = {}
@@ -584,7 +552,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             # worker for a single client‐vector pair
             def check_client(uri_client, vec_client):
                 # first h_v check
-                if not h_v(vec_server, vec_client, decryption_socket):
+                if not h_v(vec_server, vec_client):
                     return None
 
                 # cache hit?
@@ -607,10 +575,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 
 
             # parallelize the inner loop
-            with ThreadPoolExecutor(max_workers=min(len(client_encrypt_map), os.cpu_count() or 4)) as pool:
+            with ThreadPoolExecutor(max_workers=min(len(client_embed_map), os.cpu_count() or 4)) as pool:
                 futures = {
                     pool.submit(check_client, uri_client, vec_client): uri_client
-                    for uri_client, vec_client in client_encrypt_map.items()
+                    for uri_client, vec_client in client_embed_map.items()
                 }
 
                 for future in as_completed(futures):
