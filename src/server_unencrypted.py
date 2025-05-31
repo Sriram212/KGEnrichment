@@ -382,7 +382,7 @@ def para_match(vec1: np.ndarray, vec1_uri: str, vec2: np.ndarray, vec2_uri: str,
             max_score += scores[0]
         # print(f"L_U': {sorted_l_u_prime}, Scores: {scores}")
         if len(sorted_l_u_prime) > 0:
-            L[(server_prime_uri, server_prime_vec)] = sorted_l_u_prime
+            L[(server_prime_uri, server_prime_vec.tobytes())] = sorted_l_u_prime
             # L.append(sorted_l_u_prime)
     # print(L)
     # print(f"SCORE: {max_score}")
@@ -392,7 +392,7 @@ def para_match(vec1: np.ndarray, vec1_uri: str, vec2: np.ndarray, vec2_uri: str,
         return False
 
     for server_prime_uri, server_prime_vec in V_server:
-        for client_prime_uri, client_prime_vec in L[(server_prime_uri, server_prime_vec)]:
+        for client_prime_uri, client_prime_vec in L[(server_prime_uri, server_prime_vec.tobytes())]:
             if (server_prime_uri, client_prime_uri) in cache:
                 match = cache[(server_prime_uri, client_prime_uri)][0]
             else:
@@ -441,7 +441,7 @@ def para_match(vec1: np.ndarray, vec1_uri: str, vec2: np.ndarray, vec2_uri: str,
             p2_length = client_lengths[index]
             max_score -= h_p(server_path, p1_length, client_path, p2_length)
 
-            for client_prime_n_uri, client_prime_n_vec in L[(server_prime_uri, server_prime_vec)]:
+            for client_prime_n_uri, client_prime_n_vec in L[(server_prime_uri, server_prime_vec.tobytes())]:
                 if client_prime_n_uri != client_prime_uri:
                     index = 0
                     # p2_length = 0

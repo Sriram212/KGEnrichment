@@ -4,7 +4,7 @@ from visualize_graph import visualize_graph
 
 # Opening JSON file
 def get_graph():
-    with open('amy.json') as json_file:
+    with open('amy2.json') as json_file:
         data = json.load(json_file)
 
     amy_graph = Graph()
