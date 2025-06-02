@@ -658,4 +658,4 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         # measurements = [(total_bytes_sent, total_bytes_received, total_time)]
         # write_table(measurements, "results.txt", False)
         user_profile.print_graph()
-        # visualize_graph(user_profile, "server_after2.png")
+        visualize_graph(user_profile, "server_after2.png")

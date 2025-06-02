@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple
 from llm import LLMHelper
 from tenseal import CKKSVector
 from predictor import LLMPredictor
-from util import get_random_mask, merge_graphs, append_subgraph_at_uri, sum_values, merge_subgraph, write_table
+from util import get_random_mask, merge_graphs, append_subgraph_at_uri, sum_values, merge_subgraph, write_table, remove_duplicate_vertices_by_label_and_edge_label
 # from graph_example_server import get_graph
 from create_bob_graph import get_graph
 import time
@@ -690,4 +690,5 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         # measurements = [(total_bytes_sent, total_bytes_received, total_time)]
         # write_table(measurements, "results.txt", False)
         user_profile.print_graph()
-        # visualize_graph(user_profile, "server_after2.png")
+        remove_duplicate_vertices_by_label_and_edge_label(user_profile)
+        visualize_graph(user_profile, "server_after3.png")

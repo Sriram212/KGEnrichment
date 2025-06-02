@@ -211,6 +211,43 @@ def append_subgraph_at_uri(g: Graph, g1: Graph, uri: str):
 #             return v
 #     return None
 
+def remove_duplicate_vertices_by_label_and_edge_label(graph: Graph):
+    from collections import defaultdict
+
+    # Group vertices by (label, incoming_edge_label)
+    incoming_map = defaultdict(list)
+
+    # First, build a reverse lookup of incoming edges to each vertex
+    for edge in graph.edges:
+        key = (edge.v2.label, edge.label)
+        incoming_map[key].append(edge.v2)
+
+    visited = set()
+    for (label, edge_label), duplicates in incoming_map.items():
+        # Filter duplicates (must be >1 to remove)
+        unique = []
+        seen_uris = set()
+        for v in duplicates:
+            if v.uri not in seen_uris:
+                unique.append(v)
+                seen_uris.add(v.uri)
+        if len(unique) <= 1:
+            continue
+
+        canonical = unique[0]
+        for dup in unique[1:]:
+            if dup in visited or dup == canonical:
+                continue
+            # Redirect all edges pointing to the duplicate to the canonical vertex
+            for edge in graph.edges:
+                if edge.v2 == dup and edge.label == edge_label:
+                    edge.v2 = canonical
+                    edge.uri = f"{edge.v1.uri}->{canonical.uri}"
+            # Remove the duplicate vertex
+            graph.remove_vertex(dup)
+            visited.add(dup)
+
+
 def write_table(
         measurements,
         output_file,
