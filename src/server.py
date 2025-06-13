@@ -709,8 +709,8 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         print(f"Total Time: {total_time}\nEND")
         # measurements = [(total_bytes_sent, total_bytes_received, total_time)]
         # write_table(measurements, "results.txt", False)
-        user_profile.print_graph()
         remove_duplicate_vertices_by_label_and_edge_label(user_profile)
         remove_reverse_edges(user_profile)
         remove_duplicate_subgraphs(user_profile)
+        user_profile.print_graph()
         visualize_graph(user_profile, "server_after3.png")
