@@ -320,6 +320,21 @@ def remove_reverse_edges(graph: Graph):
         graph.edges.remove(edge)
         edge.v1.outward_degree -= 1
 
+def remove_vertex_with_subgraph(graph: Graph, root: Vertex):
+    """Removes the root vertex and all its descendants recursively."""
+    visited = set()
+
+    def dfs(v):
+        if v in visited:
+            return
+        visited.add(v)
+        for edge in graph.get_edges(v):
+            dfs(edge.v2)
+
+    dfs(root)
+    for v in visited:
+        graph.remove_vertex(v)
+
 def remove_duplicate_subgraphs(graph: Graph):
     from collections import defaultdict
 
@@ -345,10 +360,10 @@ def remove_duplicate_subgraphs(graph: Graph):
                 children_j = {(e.v2.label, e.label) for e in graph.get_edges(vj)}
 
                 # If one vertex's children are a subset of the other's
-                if children_i <= children_j:
+                if children_i < children_j:
                     vertices_to_remove.add(vi)
-                elif children_j <= children_i:
+                elif children_j < children_i:
                     vertices_to_remove.add(vj)
 
     for v in vertices_to_remove:
-        graph.remove_vertex(v)
+        remove_vertex_with_subgraph(graph, v)
