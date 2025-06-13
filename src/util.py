@@ -300,3 +300,55 @@ def write_table(
             f.write(" ")
             f.write(f"{t:.3f}".ljust(col_width))
             f.write("\n")
+
+
+def remove_reverse_edges(graph: Graph):
+    seen = set()
+    edges_to_remove = []
+
+    for edge in graph.edges:
+        pair = (edge.v1.label, edge.v2.label, edge.label)
+        reverse_pair = (edge.v2.label, edge.v1.label, edge.label)
+
+        if reverse_pair in seen:
+            # We already have the reverse edge; mark this one for removal
+            edges_to_remove.append(edge)
+        else:
+            seen.add(pair)
+
+    for edge in edges_to_remove:
+        graph.edges.remove(edge)
+        edge.v1.outward_degree -= 1
+
+def remove_duplicate_subgraphs(graph: Graph):
+    from collections import defaultdict
+
+    # Group vertices by label
+    label_to_vertices = defaultdict(list)
+    for v in graph.vertices:
+        label_to_vertices[v.label].append(v)
+
+    vertices_to_remove = set()
+
+    for label, verts in label_to_vertices.items():
+        n = len(verts)
+        for i in range(n):
+            for j in range(i + 1, n):
+                vi = verts[i]
+                vj = verts[j]
+
+                # Skip if either vertex is already marked for removal
+                if vi in vertices_to_remove or vj in vertices_to_remove:
+                    continue
+
+                children_i = {(e.v2.label, e.label) for e in graph.get_edges(vi)}
+                children_j = {(e.v2.label, e.label) for e in graph.get_edges(vj)}
+
+                # If one vertex's children are a subset of the other's
+                if children_i <= children_j:
+                    vertices_to_remove.add(vi)
+                elif children_j <= children_i:
+                    vertices_to_remove.add(vj)
+
+    for v in vertices_to_remove:
+        graph.remove_vertex(v)

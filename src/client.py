@@ -1,6 +1,7 @@
 import socket
 import struct
 import time
+import traceback
 
 import numpy as np
 from encryption import Encryption
@@ -119,13 +120,17 @@ def decrypt_vector(encrypted_vector_bytes):
 
 def receive_full_message(conn):
     """Receives a message with a fixed-length header."""
+    # conn.settimeout(1000000)
+
     msg_len_data = conn.recv(4)  # Get the first 4 bytes (message length)
     if not msg_len_data:
+        print("MSG_LEN_Data None")
         return None
     msg_len = struct.unpack("!I", msg_len_data)[0]  # Unpack message length
 
     msg_type_data = conn.recv(4)
     if not msg_type_data:
+        print("MSG_TYPE_DATA None")
         return None
     msg_type = struct.unpack("!I", msg_type_data)[0]
 
@@ -134,6 +139,7 @@ def receive_full_message(conn):
     while len(msg) < msg_len:
         msg_packet = conn.recv(msg_len - len(msg))
         if not msg_packet:
+            print("MSG_Packet None")
             return None
         msg += msg_packet
 
@@ -143,127 +149,135 @@ def receive_full_message(conn):
     return msg_type, msg
 
 def request_handler(conn):
-    while True:
-        msg_type, msg = receive_full_message(conn)
-        if not msg:
-            break  # Connection closed
+    try:
+        while True:
+            msg_type, msg = receive_full_message(conn)
+            if not msg:
+                break  # Connection closed
 
-        if msg_type == 1: #Vertex Similarity
-            vertex_similarity_start_time = time.time()
-            encrypted_vector_bytes = pickle.loads(msg)
-            decrypted_values = decrypt_vector(encrypted_vector_bytes)
+            if msg_type == 1: #Vertex Similarity
+                vertex_similarity_start_time = time.time()
+                encrypted_vector_bytes = pickle.loads(msg)
+                decrypted_values = decrypt_vector(encrypted_vector_bytes)
 
-            if decrypted_values < 0 - epsilon:
-                response = 0
-            else:
-                response = 1
-            # Send back the decrypted values
-            response_bytes = struct.pack("!I", response)
-            if "Vertex Similarity" in bytes_sent_dict:
-                bytes_sent_dict["Vertex Similarity"].append(len(response_bytes))
-            else:
-                bytes_sent_dict["Vertex Similarity"] = [len(response_bytes)]
-            conn.sendall(response_bytes)
-            vertex_similarity_end_time = time.time()
-            vertex_similarity_total_time = vertex_similarity_end_time - vertex_similarity_start_time
-            if "Vertex Similarity" in times_dict:
-                times_dict["Vertex Similarity"].append(vertex_similarity_total_time)
-            else:
-                times_dict["Vertex Similarity"] = [vertex_similarity_total_time]
-        elif msg_type == 2:
-            encrypted_vector_map = pickle.loads(msg)
-            client_vec_uri = encrypted_vector_map["Vector"]
-            k = struct.unpack("!I", encrypted_vector_map["K"])[0]
-            client_vec = encrypt_map_client[client_vec_uri]
-            paths, edges = h_r(client_vec, k)
-            # for path in paths:
-            #     print(f'Path: {[x.label for x in path]}')
-            # for edge in edges:
-            #     print(f'Edge: {[x.label for x in edge]}')
+                if decrypted_values < 0 - epsilon:
+                    response = 0
+                else:
+                    response = 1
+                # Send back the decrypted values
+                response_bytes = struct.pack("!I", response)
+                if "Vertex Similarity" in bytes_sent_dict:
+                    bytes_sent_dict["Vertex Similarity"].append(len(response_bytes))
+                else:
+                    bytes_sent_dict["Vertex Similarity"] = [len(response_bytes)]
+                conn.sendall(response_bytes)
+                vertex_similarity_end_time = time.time()
+                vertex_similarity_total_time = vertex_similarity_end_time - vertex_similarity_start_time
+                if "Vertex Similarity" in times_dict:
+                    times_dict["Vertex Similarity"].append(vertex_similarity_total_time)
+                else:
+                    times_dict["Vertex Similarity"] = [vertex_similarity_total_time]
+            elif msg_type == 2:
+                encrypted_vector_map = pickle.loads(msg)
+                client_vec_uri = encrypted_vector_map["Vector"]
+                k = struct.unpack("!I", encrypted_vector_map["K"])[0]
+                client_vec = encrypt_map_client[client_vec_uri]
+                paths, edges = h_r(client_vec, k)
+                # for path in paths:
+                #     print(f'Path: {[x.label for x in path]}')
+                # for edge in edges:
+                #     print(f'Edge: {[x.label for x in edge]}')
 
-            edges_vectors = [model.encode_path(edge) for edge in edges]
+                edges_vectors = [model.encode_path(edge) for edge in edges]
 
-            paths_vectors_encrypted = [[encrypt_map_client[x.uri] for x in path] for path in paths]
-            path_length_encrypted = [ts.ckks_vector(context, [1/len(path)]) for path in paths]
-            edges_vectors_encrypted = [model.encrypt_path(context, edge_vec) for edge_vec in edges_vectors]
+                paths_vectors_encrypted = [[encrypt_map_client[x.uri] for x in path] for path in paths]
+                path_length_encrypted = [ts.ckks_vector(context, [1/len(path)]) for path in paths]
+                edges_vectors_encrypted = [model.encrypt_path(context, edge_vec) for edge_vec in edges_vectors]
 
-            # print(f'Length of edges vectors encrypted: {len(edges_vectors_encrypted)}')
+                # print(f'Length of edges vectors encrypted: {len(edges_vectors_encrypted)}')
 
-            uris = [path[1].uri for path in paths]
+                uris = [path[1].uri for path in paths]
 
-            paths_serialized = [path[1].serialize() for path in paths_vectors_encrypted]
-            edges_serialized = [edge.serialize() for edge in edges_vectors_encrypted]
-            path_length_serialized = [length.serialize() for length in path_length_encrypted]
+                paths_serialized = [path[1].serialize() for path in paths_vectors_encrypted]
+                edges_serialized = [edge.serialize() for edge in edges_vectors_encrypted]
+                path_length_serialized = [length.serialize() for length in path_length_encrypted]
 
-            paths_uris_edges_map_serialized = pickle.dumps({"URIs": uris, "Vectors": paths_serialized, "Edges": edges_serialized, "Length": path_length_serialized})
-            client_top_k_paths_bytes = struct.pack("!I", len(paths_uris_edges_map_serialized)) + paths_uris_edges_map_serialized
+                paths_uris_edges_map_serialized = pickle.dumps({"URIs": uris, "Vectors": paths_serialized, "Edges": edges_serialized, "Length": path_length_serialized})
+                client_top_k_paths_bytes = struct.pack("!I", len(paths_uris_edges_map_serialized)) + paths_uris_edges_map_serialized
 
-            if "Top-K Paths" in bytes_sent_dict:
-                bytes_sent_dict["Top-K Paths"].append(len(client_top_k_paths_bytes))
-            else:
-                bytes_sent_dict["Top-K Paths"] = [len(client_top_k_paths_bytes)]
+                if "Top-K Paths" in bytes_sent_dict:
+                    bytes_sent_dict["Top-K Paths"].append(len(client_top_k_paths_bytes))
+                else:
+                    bytes_sent_dict["Top-K Paths"] = [len(client_top_k_paths_bytes)]
 
-            conn.sendall(client_top_k_paths_bytes)
-        elif msg_type == 3: #Path Similarity
-            path_similarity_start_time = time.time()
-            encrypted_vector_bytes = pickle.loads(msg)
-            decrypted_values = decrypt_vector(encrypted_vector_bytes)
+                conn.sendall(client_top_k_paths_bytes)
+            elif msg_type == 3: #Path Similarity
+                path_similarity_start_time = time.time()
+                encrypted_vector_bytes = pickle.loads(msg)
+                decrypted_values = decrypt_vector(encrypted_vector_bytes)
 
-            if decrypted_values < 0 - epsilon:
-                response = (-1 * abs(decrypted_values)) * mask
-            else:
-                response = abs(decrypted_values) * mask
-            response_bytes = struct.pack('d', response)
+                if decrypted_values < 0 - epsilon:
+                    response = (-1 * abs(decrypted_values)) * mask
+                else:
+                    response = abs(decrypted_values) * mask
+                response_bytes = struct.pack('d', response)
 
-            if "Path Similarity" in bytes_sent_dict:
-                bytes_sent_dict["Path Similarity"].append(len(response_bytes))
-            else:
-                bytes_sent_dict["Path Similarity"] = [len(response_bytes)]
+                if "Path Similarity" in bytes_sent_dict:
+                    bytes_sent_dict["Path Similarity"].append(len(response_bytes))
+                else:
+                    bytes_sent_dict["Path Similarity"] = [len(response_bytes)]
 
-            conn.sendall(response_bytes)
-            path_similarity_end_time = time.time()
-            path_similarity_total_time = path_similarity_end_time - path_similarity_start_time
+                conn.sendall(response_bytes)
+                path_similarity_end_time = time.time()
+                path_similarity_total_time = path_similarity_end_time - path_similarity_start_time
 
-            if "Path Similarity" in times_dict:
-                times_dict["Path Similarity"].append(path_similarity_total_time)
-            else:
-                times_dict["Path Similarity"] = [path_similarity_total_time]
+                if "Path Similarity" in times_dict:
+                    times_dict["Path Similarity"].append(path_similarity_total_time)
+                else:
+                    times_dict["Path Similarity"] = [path_similarity_total_time]
 
-        elif msg_type == 4:
-            uri = msg.decode()
-            sub_graph = user_profile.extract_lineage_set(user_profile.lookup(uri))
-            sub_graph_bytes = pickle.dumps(sub_graph)
-            response_bytes = struct.pack("!I", len(sub_graph_bytes)) + sub_graph_bytes
+            elif msg_type == 4:
+                uri = msg.decode()
+                sub_graph = user_profile.extract_lineage_set(user_profile.lookup(uri))
+                sub_graph_bytes = pickle.dumps(sub_graph)
+                response_bytes = struct.pack("!I", len(sub_graph_bytes)) + sub_graph_bytes
 
-            if "Sub Graph" in bytes_sent_dict:
-                bytes_sent_dict["Sub Graph"].append(len(response_bytes))
-            else:
-                bytes_sent_dict["Sub Graph"] = [len(response_bytes)]
+                if "Sub Graph" in bytes_sent_dict:
+                    bytes_sent_dict["Sub Graph"].append(len(response_bytes))
+                else:
+                    bytes_sent_dict["Sub Graph"] = [len(response_bytes)]
 
-            conn.sendall(response_bytes)
-        elif msg_type == 5: #Enrichment
-            enrichment_start_time = time.time()
-            server_sub_graph_uri_map = pickle.loads(msg)
-            uri = server_sub_graph_uri_map['URI']
-            server_sub_graph = server_sub_graph_uri_map['Subgraph']
-            client_sub_graph = user_profile.extract_lineage_set(user_profile.lookup(uri))
+                conn.sendall(response_bytes)
+            elif msg_type == 5: #Enrichment
+                enrichment_start_time = time.time()
+                server_sub_graph_uri_map = pickle.loads(msg)
+                uri = server_sub_graph_uri_map['URI']
+                server_sub_graph = server_sub_graph_uri_map['Subgraph']
+                client_sub_graph = user_profile.extract_lineage_set(user_profile.lookup(uri))
 
-            merged_graph = merge_graphs(server_sub_graph, client_sub_graph)
-            # merged_graph.print_graph()
-            append_subgraph_at_uri(user_profile, merged_graph, uri)
-            # user_profile.print_graph()
-            enrichment_end_time = time.time()
-            enrichment_total_time = enrichment_end_time - enrichment_start_time
+                merged_graph = merge_graphs(server_sub_graph, client_sub_graph)
+                # merged_graph.print_graph()
+                append_subgraph_at_uri(user_profile, merged_graph, uri)
+                # user_profile.print_graph()
+                enrichment_end_time = time.time()
+                enrichment_total_time = enrichment_end_time - enrichment_start_time
 
-            if "Enrichment" in times_dict:
-                times_dict["Enrichment"].append(enrichment_total_time)
-            else:
-                times_dict["Enrichment"] = [enrichment_total_time]
+                if "Enrichment" in times_dict:
+                    times_dict["Enrichment"].append(enrichment_total_time)
+                else:
+                    times_dict["Enrichment"] = [enrichment_total_time]
+            elif msg_type == 6: #Health Check
+                message = msg.decode().strip()
+                if message == "ping":
+                    print("Received keep-alive ping")
+    except:
+        print(traceback.format_exc())
 
 
 
 def start_decryption_server():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
     server_socket.bind((HOST, PORT + 10))
     server_socket.listen(1)
     print("Client is waiting for server connection...")
@@ -273,6 +287,7 @@ def start_decryption_server():
 
     request_handler(conn)
 
+    print("CLOSING CONNECTION")
     conn.close()
     server_socket.close()
 
@@ -357,7 +372,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     s.shutdown(socket.SHUT_WR)
     print('Sent Context and Vertex Embeddings')
 
-    s.settimeout(500)
     data = s.recv(4)
     bytes_rec_list.append(4)
     msg_type = struct.unpack("!I", data)[0]

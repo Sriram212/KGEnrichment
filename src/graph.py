@@ -116,5 +116,3 @@ class Graph:
                     print(f"    └── {edge.v2.label} ({edge.v2.uri}) [label: {edge.label}]")
             else:
                 print(f"  {vertex.label} ({vertex.uri}) -> ∅")
-
-

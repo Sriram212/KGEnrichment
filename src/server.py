@@ -1,11 +1,14 @@
 import socket
 import struct
+import threading
 
 import tenseal as ts
 from tenseal import Context
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
+
+from tqdm import tqdm
 
 from graph import Graph, Vertex, Entity, Edge
 import pickle
@@ -14,7 +17,8 @@ from typing import Dict, List, Tuple
 from llm import LLMHelper
 from tenseal import CKKSVector
 from predictor import LLMPredictor
-from util import get_random_mask, merge_graphs, append_subgraph_at_uri, sum_values, merge_subgraph, write_table, remove_duplicate_vertices_by_label_and_edge_label
+from util import get_random_mask, merge_graphs, append_subgraph_at_uri, sum_values, merge_subgraph, write_table, \
+    remove_duplicate_vertices_by_label_and_edge_label, remove_reverse_edges, remove_duplicate_subgraphs
 # from graph_example_server import get_graph
 from create_bob_graph import get_graph
 import time
@@ -134,8 +138,8 @@ times_dict["Compute Embeddings"] = end - start
 # p1_embedding = model.encode_path(p1)
 
 mask = get_random_mask(1, 2, False)
-sigma = 0.6
-delta = 0.6
+sigma = 0.75
+delta = 1.8
 
 # cache = {}
 ecache = {}
@@ -192,6 +196,7 @@ def h_v(vec1: CKKSVector, vec2: CKKSVector, decryption_socket: socket):
         bytes_sent_dict["Vertex Similarity"].append(len(response_bytes))
     else:
         bytes_sent_dict["Vertex Similarity"] = [len(response_bytes)]
+
 
     decryption_socket.sendall(response_bytes)
 
@@ -319,6 +324,17 @@ def receive_full_message(conn):
         msg += msg_packet
     return msg
 
+def keep_alive(sock):
+    while True:
+        try:
+            health_check_bytes = b"ping\n"
+            response_bytes = struct.pack("!I", len(health_check_bytes)) + struct.pack("!I", 6) + health_check_bytes
+            sock.sendall(response_bytes)
+            time.sleep(30)
+        except Exception as e:
+            print("Connection lost:", e)
+            break
+
 
 def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str, delta, k, decryption_socket: socket) -> bool:
     start = time.time()
@@ -370,6 +386,7 @@ def para_match(vec1: CKKSVector, vec1_uri: str, vec2: CKKSVector, vec2_uri: str,
             bytes_sent_dict["Top-K Paths"] = [len(response_bytes)]
 
         decryption_socket.sendall(response_bytes)
+        decryption_socket.settimeout(None)
         msg = receive_full_message(decryption_socket)
 
         paths_edges_uris_map = pickle.loads(msg)
@@ -509,6 +526,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
     print('Ready to Connect')
     s.bind((HOST, PORT))
     s.listen()
+    s.settimeout(None)
     conn, addr = s.accept()
     with conn:
         print(f"Connected by {addr}")
@@ -551,7 +569,10 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         serialized_map_server = {}
 
         decryption_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        decryption_socket.settimeout(None)
         decryption_socket.connect((HOST, PORT + 10))
+
+        thread = threading.Thread(target=keep_alive, daemon=True, args=(decryption_socket,)).start()
 
         #VParaMatch
         v_para_match_start = time.time()
@@ -575,7 +596,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         PI = {}
         C = {}
 
-        for uri_server, vec_server in encrypt_map_server.items():
+        for uri_server, vec_server in tqdm(encrypt_map_server.items()):
             PI[uri_server] = []
             C[uri_server] = []
             cache = {}
@@ -617,7 +638,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                     result = future.result()
                     if result is not None:
                         PI[uri_server].append(result)
-            print("Server Node Complete")
 
 
                     # product_mask = (vec_client.dot(vec_server) - sigma) * mask
@@ -691,4 +711,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         # write_table(measurements, "results.txt", False)
         user_profile.print_graph()
         remove_duplicate_vertices_by_label_and_edge_label(user_profile)
+        remove_reverse_edges(user_profile)
+        remove_duplicate_subgraphs(user_profile)
         visualize_graph(user_profile, "server_after3.png")

@@ -13,7 +13,8 @@ import numpy as np
 from typing import Dict, List, Tuple
 from llm import LLMHelper
 from predictor import LLMPredictor
-from util import get_random_mask, merge_graphs, append_subgraph_at_uri, sum_values, merge_subgraph, write_table
+from util import get_random_mask, merge_graphs, append_subgraph_at_uri, sum_values, merge_subgraph, write_table, \
+    remove_duplicate_vertices_by_label_and_edge_label, remove_reverse_edges, remove_duplicate_subgraphs
 # from graph_example_server import get_graph
 from create_bob_graph import get_graph
 import time
@@ -133,7 +134,7 @@ times_dict["Compute Embeddings"] = end - start
 # p1_embedding = model.encode_path(p1)
 
 mask = get_random_mask(1, 2, False)
-sigma = 0.6
+sigma = 0.75
 delta = 0.6
 
 # cache = {}
@@ -658,4 +659,7 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         # measurements = [(total_bytes_sent, total_bytes_received, total_time)]
         # write_table(measurements, "results.txt", False)
         user_profile.print_graph()
+        remove_duplicate_vertices_by_label_and_edge_label(user_profile)
+        remove_reverse_edges(user_profile)
+        remove_duplicate_subgraphs(user_profile)
         visualize_graph(user_profile, "server_after2.png")
